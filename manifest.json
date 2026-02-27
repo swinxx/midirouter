@@ -1,0 +1,6 @@
+{
+  "name": "midirouter",
+  "version": "1.0",
+  "author": "morrishanson",
+  "description": "MIDI routing between devices with channel filtering and SysEx passthrough"
+}
