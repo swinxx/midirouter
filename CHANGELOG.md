@@ -1,5 +1,47 @@
 # MidiRouter CHANGELOG
 
+## v1.01 — 2026-02-28
+
+### Summary
+
+Six bugs fixed across `core.lua` and `mod.lua` based on deep code review.
+No functional changes to routing behaviour — all fixes improve robustness,
+correctness and efficiency.
+
+---
+
+### Fixes
+
+#### core.lua — Expose MAX_RULES as public constant
+- **File:** `lib/core.lua`
+- **Description:** `MAX_RULES` is now exposed as `Core.MAX_RULES` so `mod.lua` can read it directly instead of maintaining a duplicate hardcoded constant. Eliminates a maintenance hazard where changing the limit in one file would silently diverge from the other.
+
+#### core.lua — Prune stale SysEx accumulators on device disconnect
+- **File:** `lib/core.lua`
+- **Function:** `Core.scan_devices()`
+- **Description:** `_sx_ev` and `_sx_vp` accumulator tables were never pruned when devices disconnected. On systems with frequent hot-plug cycles, entries for old ports accumulated indefinitely. Fixed by removing entries for ports no longer present after each scan.
+
+#### mod.lua — MAX_RULES read from core instead of duplicated
+- **File:** `lib/mod.lua`
+- **Description:** `MAX_RULES` now reads `core.MAX_RULES` (with fallback to 16) instead of a hardcoded local constant.
+
+#### mod.lua — system_post_startup made idempotent
+- **File:** `lib/mod.lua`
+- **Function:** `system_post_startup` hook
+- **Description:** Added a `_startup_done` guard flag. If the hook somehow fires more than once, the second call returns immediately, preventing duplicate default rules from being created when `core.load()` fails.
+
+#### mod.lua — script_post_init made idempotent
+- **File:** `lib/mod.lua`
+- **Function:** `script_post_init` hook
+- **Description:** Added a `_params_registered` guard flag, reset in `script_post_cleanup`. Prevents duplicate `params:add_*` entries with identical keys if the hook fires more than once for the same script load, which would cause undefined behaviour in the norns params system.
+
+#### mod.lua — Cache device options list in change_val()
+- **File:** `lib/mod.lua`
+- **Function:** `change_val()`, `refresh_dev_names()`
+- **Description:** The `opts` table for device selection was allocated on every encoder turn. Now built once in `refresh_dev_names()` and reused as `_dev_opts`, eliminating repeated GC pressure during fast encoder sweeps.
+
+---
+
 ## v1.0 — 2026-02-27
 
 ### Summary

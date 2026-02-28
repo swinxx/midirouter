@@ -1,4 +1,4 @@
--- midirouter/lib/mod.lua  v1.0
+-- midirouter/lib/mod.lua  v1.01
 
 local mod  = require 'core/mods'
 local core = require 'midirouter/lib/core'
@@ -26,10 +26,11 @@ local V_RULE = 2
 local V_DEL  = 3
 local V_ADD  = 4
 
--- FIX (BUG-10): MAX_RULES constant mirrored from core so the UI can guard
--- against it. core.add_rule() silently fails when #core.rules >= 16; the UI
--- must check this limit before opening V_ADD so the user gets feedback.
-local MAX_RULES = 16
+-- FIX (v1.01): Read MAX_RULES directly from core instead of duplicating the
+-- constant. Previously both files hardcoded 16; if core.lua changed the limit
+-- mod.lua would silently diverge and allow the UI to open V_ADD past the real
+-- limit. core.MAX_RULES is the single source of truth.
+local MAX_RULES = core.MAX_RULES or 16
 
 local st = {
   view       = V_LIST,
@@ -45,8 +46,18 @@ local st = {
 
 local _dev_names = {}
 
+-- FIX (v1.01): Pre-built device options list for change_val(). Previously
+-- a new table was allocated on every encoder turn in change_val() for
+-- the "dev" type, causing repeated GC pressure on fast encoder sweeps.
+-- _dev_opts is rebuilt once per update_devices() call instead.
+local _dev_opts = { "all" }
+
 local function refresh_dev_names()
   _dev_names = core.device_names()
+  -- FIX (v1.01): Rebuild the cached opts list used by change_val() so it
+  -- stays in sync with _dev_names without allocating a new table per encoder turn.
+  _dev_opts = { "all" }
+  for _, name in ipairs(_dev_names) do _dev_opts[#_dev_opts + 1] = name end
 end
 
 local function update_devices()
@@ -114,12 +125,11 @@ local function change_val(p, val, d)
   if p.type == "bool" then
     return d > 0
   elseif p.type == "dev" then
-    local opts = { "all" }
-    for _, name in ipairs(_dev_names) do opts[#opts + 1] = name end
+    -- FIX (v1.01): Use cached _dev_opts instead of allocating a new table here.
     local ci = 1
-    for i, v in ipairs(opts) do if v == val then ci = i; break end end
-    ci = math.max(1, math.min(#opts, ci + d))
-    return opts[ci]
+    for i, v in ipairs(_dev_opts) do if v == val then ci = i; break end end
+    ci = math.max(1, math.min(#_dev_opts, ci + d))
+    return _dev_opts[ci]
   elseif p.type == "ch_all" then
     local cur = (val == "all") and 0 or val
     local nxt = math.max(0, math.min(16, cur + d))
@@ -444,9 +454,23 @@ end
 
 mod.menu.register(mod.this_name, m)
 
+-- ─── Lifecycle guards ────────────────────────────────────────────────────
+
+-- FIX (v1.01): Guard flags to make lifecycle hooks idempotent.
+-- system_post_startup and script_post_init must not run their setup logic
+-- more than once per respective event. Without guards, a second call to
+-- system_post_startup would create duplicate default rules (if core.load()
+-- fails twice), and a second call to script_post_init would register
+-- duplicate params entries with identical keys, causing undefined behavior
+-- in the norns params system.
+local _startup_done   = false
+local _params_registered = false
+
 -- ─── Lifecycle ───────────────────────────────────────────────────────────
 
 mod.hook.register("system_post_startup", "midirouter_start", function()
+  if _startup_done then return end  -- FIX (v1.01): idempotency guard
+  _startup_done = true
   print("[midirouter] starting up...")
 
   core.scan_devices()
@@ -489,11 +513,14 @@ end)
 -- pattern. Without this hook, after a script switch the router can end up
 -- with stale cached device entries or missing vp.event handlers.
 mod.hook.register("script_post_cleanup", "midirouter_cleanup", function()
+  _params_registered = false  -- FIX (v1.01): reset so script_post_init re-registers params for the next script
   update_devices()
 end)
 
 -- Script init: rescan + expose params
 mod.hook.register("script_post_init", "midirouter_params", function()
+  if _params_registered then return end  -- FIX (v1.01): idempotency guard — prevents duplicate params entries if hook fires twice for the same script load
+  _params_registered = true
   update_devices()
 
   local dev_opts = { "all" }

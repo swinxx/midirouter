@@ -1,4 +1,4 @@
--- midirouter/lib/core.lua  v1.0
+-- midirouter/lib/core.lua  v1.01
 --
 -- MIDI routing engine for norns.
 --
@@ -22,6 +22,7 @@ local SAVE_DIR      = "/home/we/dust/data/midirouter"
 local SAVE_FILE     = SAVE_DIR .. "/rules.lua"
 local SAVE_BACKUP   = SAVE_FILE .. ".bak"
 local MAX_RULES     = 16
+Core.MAX_RULES      = MAX_RULES  -- FIX (v1.01): expose so mod.lua reads from one source of truth
 local SYSEX_TIMEOUT = 2.0
 local SAVE_DELAY    = 2.0
 
@@ -543,6 +544,15 @@ function Core.scan_devices()
   Core.devices      = devs
   Core.id_to_port   = id_map
   Core.name_to_port = name_map
+
+  -- FIX (v1.01): Remove accumulator entries for ports that are no longer
+  -- connected. Previously _sx_ev and _sx_vp grew indefinitely with entries
+  -- for disconnected ports, since sx_ensure() only ever added entries and
+  -- scan_devices() never pruned stale ones. On a device with frequent
+  -- connect/disconnect cycles this caused unbounded memory growth.
+  for port in pairs(_sx_ev) do if not devs[port] then _sx_ev[port] = nil end end
+  for port in pairs(_sx_vp) do if not devs[port] then _sx_vp[port] = nil end end
+
   build_cache()
   Core.install_sysex_handlers()
 end
@@ -696,7 +706,7 @@ end
 -- ─── Diagnostics ─────────────────────────────────────────────────────────
 
 function Core.diag()
-  print("=== midirouter v1.0 ===")
+  print("=== midirouter v1.01 ===")
   print("  cached rules:      " .. #_cache)
   print("  total rules:       " .. #Core.rules)
   print("  save pending:      " .. tostring(_save_clock ~= nil))
