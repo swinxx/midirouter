@@ -1,4 +1,4 @@
--- midirouter/lib/mod.lua  v1.01
+-- midirouter/lib/mod.lua  v1.03
 
 local mod  = require 'core/mods'
 local core = require 'midirouter/lib/core'

@@ -1,4 +1,4 @@
--- midirouter/lib/core.lua  v1.01
+-- midirouter/lib/core.lua  v1.03
 --
 -- MIDI routing engine for norns.
 --
@@ -24,6 +24,7 @@ local SAVE_BACKUP   = SAVE_FILE .. ".bak"
 local MAX_RULES     = 16
 Core.MAX_RULES      = MAX_RULES  -- FIX (v1.01): expose so mod.lua reads from one source of truth
 local SYSEX_TIMEOUT = 2.0
+local SYSEX_MAX_LEN = 8192  -- FIX (v1.03): prevent unbounded memory growth from malformed SysEx (missing 0xF7)
 local SAVE_DELAY    = 2.0
 
 -- ─── Type bitmasks ───────────────────────────────────────────────────────
@@ -285,8 +286,9 @@ local function accumulate_sysex(acc, port, data, tag)
         route_sysex(port, acc.buf)
         sx_reset(acc)
         any_consumed = true
-      elseif byte >= 0xF8 then
-        -- Realtime: pass through
+      elseif byte >= 0xF8 then  -- luacheck: ignore
+        -- Realtime bytes (clock, start, stop etc.) are transparent per MIDI spec;
+        -- they must not interrupt SysEx accumulation, so we intentionally do nothing.
       elseif byte >= 0x80 then
         if Core.sysex_debug then
           print(string.format("[midirouter] SysEx aborted port%d (%s) by 0x%02X",
@@ -294,8 +296,17 @@ local function accumulate_sysex(acc, port, data, tag)
         end
         sx_reset(acc)
       else
-        acc.buf[#acc.buf + 1] = byte
-        any_consumed = true
+        -- FIX (v1.03): guard against unbounded accumulation from malformed SysEx
+        if #acc.buf >= SYSEX_MAX_LEN then
+          if Core.sysex_debug then
+            print(string.format("[midirouter] SysEx too long port%d (%s), discarding %d bytes",
+              port, tag, #acc.buf))
+          end
+          sx_reset(acc)
+        else
+          acc.buf[#acc.buf + 1] = byte
+          any_consumed = true
+        end
       end
     end
   end
@@ -418,7 +429,17 @@ function Core.handle_event(id, data)
         _sx_seen_ev[src_port] = nil  -- FIX (KNOWN-01): clear tentative flag set at 0xF0 so Path B is not permanently suppressed after a SysEx abort
         midi_buf = { byte }
       else
-        acc.buf[#acc.buf + 1] = byte
+        -- FIX (v1.03): guard against unbounded accumulation
+        if #acc.buf >= SYSEX_MAX_LEN then
+          if Core.sysex_debug then
+            print(string.format("[midirouter] SysEx too long port%d (ev), discarding %d bytes",
+              src_port, #acc.buf))
+          end
+          sx_reset(acc)
+          _sx_seen_ev[src_port] = nil
+        else
+          acc.buf[#acc.buf + 1] = byte
+        end
       end
 
     else
@@ -631,13 +652,22 @@ end
 -- ─── Persistence ─────────────────────────────────────────────────────────
 
 function Core.save()
-  os.execute("mkdir -p " .. SAVE_DIR)
+  -- FIX (v1.03): check mkdir return value
+  local ok = os.execute("mkdir -p " .. SAVE_DIR)
+  if not ok then
+    print("[midirouter] WARNING: could not create save directory " .. SAVE_DIR)
+    return
+  end
   local f = io.open(SAVE_FILE, "r")
   if f then
     f:close()
     os.rename(SAVE_FILE, SAVE_BACKUP)
   end
-  tab.save(Core.rules, SAVE_FILE)
+  -- FIX (v1.03): check tab.save return value
+  local saved = tab.save(Core.rules, SAVE_FILE)
+  if not saved then
+    print("[midirouter] WARNING: failed to save rules to " .. SAVE_FILE)
+  end
 end
 
 function Core.save_deferred()
@@ -706,7 +736,7 @@ end
 -- ─── Diagnostics ─────────────────────────────────────────────────────────
 
 function Core.diag()
-  print("=== midirouter v1.01 ===")
+  print("=== midirouter v1.03 ===")
   print("  cached rules:      " .. #_cache)
   print("  total rules:       " .. #Core.rules)
   print("  save pending:      " .. tostring(_save_clock ~= nil))
