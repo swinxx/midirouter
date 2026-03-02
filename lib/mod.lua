@@ -523,8 +523,9 @@ mod.hook.register("script_post_init", "midirouter_params", function()
   _params_registered = true
   update_devices()
 
-  local dev_opts = { "all" }
-  for _, name in ipairs(_dev_names) do dev_opts[#dev_opts + 1] = name end
+  -- FIX (v1.02): Use cached _dev_opts from refresh_dev_names() instead of
+  -- rebuilding the same table here on every script load.
+  local dev_opts = _dev_opts
 
   local function dev_idx(val)
     if val == "all" then return 1 end
